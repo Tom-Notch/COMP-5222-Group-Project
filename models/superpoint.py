@@ -39,18 +39,20 @@
 # %AUTHORS_END%
 # --------------------------------------------------------------------*/
 # %BANNER_END%
-
 from pathlib import Path
+
 import torch
 from torch import nn
 
+
 def simple_nms(scores, nms_radius: int):
-    """ Fast Non-maximum suppression to remove nearby points """
-    assert(nms_radius >= 0)
+    """Fast Non-maximum suppression to remove nearby points"""
+    assert nms_radius >= 0
 
     def max_pool(x):
         return torch.nn.functional.max_pool2d(
-            x, kernel_size=nms_radius*2+1, stride=1, padding=nms_radius)
+            x, kernel_size=nms_radius * 2 + 1, stride=1, padding=nms_radius
+        )
 
     zeros = torch.zeros_like(scores)
     max_mask = scores == max_pool(scores)
@@ -63,18 +65,24 @@ def simple_nms(scores, nms_radius: int):
 
 
 def remove_borders(keypoints, scores, border: int, height: int, width: int):
-    """ Removes keypoints too close to the border """
+    """Removes keypoints too close to the border"""
     mask_w = (keypoints[:, 0] >= border) & (keypoints[:, 0] < (width - border))
     mask_h = (keypoints[:, 1] >= border) & (keypoints[:, 1] < (height - border))
     mask = mask_h & mask_w
     return keypoints[mask], scores[mask]
 
+
 def remove_borders_projected(keypoints, scores, border, height, width, homo_matrix):
     projected_keypoints = warp_keypoints(keypoints, torch.inverse(homo_matrix))
-    mask_w = (projected_keypoints[:, 0] >= border) & (projected_keypoints[:, 0] < (width - border))
-    mask_h = (projected_keypoints[:, 1] >= border) & (projected_keypoints[:, 1] < (height - border))
+    mask_w = (projected_keypoints[:, 0] >= border) & (
+        projected_keypoints[:, 0] < (width - border)
+    )
+    mask_h = (projected_keypoints[:, 1] >= border) & (
+        projected_keypoints[:, 1] < (height - border)
+    )
     mask = mask_h & mask_w
     return keypoints[mask], scores[mask]
+
 
 def top_k_keypoints(keypoints, scores, k: int):
     if k >= len(keypoints):
@@ -84,24 +92,33 @@ def top_k_keypoints(keypoints, scores, k: int):
 
 
 def sample_descriptors(keypoints, descriptors, s: int = 8):
-    """ Interpolate descriptors at keypoint locations """
+    """Interpolate descriptors at keypoint locations"""
     b, c, h, w = descriptors.shape
     keypoints = keypoints - s / 2 + 0.5
-    keypoints /= torch.tensor([(w*s - s/2 - 0.5), (h*s - s/2 - 0.5)],
-                              ).to(keypoints)[None]
-    keypoints = keypoints*2 - 1  # normalize to (-1, 1)
-    args = {'align_corners': True} if int(torch.__version__[2]) > 2 else {}
+    keypoints /= torch.tensor(
+        [(w * s - s / 2 - 0.5), (h * s - s / 2 - 0.5)],
+    ).to(
+        keypoints
+    )[None]
+    keypoints = keypoints * 2 - 1  # normalize to (-1, 1)
+    args = {"align_corners": True} if int(torch.__version__[2]) > 2 else {}
     descriptors = torch.nn.functional.grid_sample(
-        descriptors, keypoints.view(b, 1, -1, 2), mode='bilinear', **args)
+        descriptors, keypoints.view(b, 1, -1, 2), mode="bilinear", **args
+    )
     descriptors = torch.nn.functional.normalize(
-        descriptors.reshape(b, c, -1), p=2, dim=1)
+        descriptors.reshape(b, c, -1), p=2, dim=1
+    )
     return descriptors
 
+
 def warp_keypoints(keypoints, homography_mat):
-    source = torch.cat([keypoints, torch.ones(len(keypoints), 1).to(keypoints.device)], dim=-1)
+    source = torch.cat(
+        [keypoints, torch.ones(len(keypoints), 1).to(keypoints.device)], dim=-1
+    )
     dest = (homography_mat @ source.T).T
     dest /= dest[:, 2:3]
     return dest[:, :2]
+
 
 class SuperPoint(nn.Module):
     """SuperPoint Convolutional Detector and Descriptor
@@ -111,12 +128,13 @@ class SuperPoint(nn.Module):
     Rabinovich. In CVPRW, 2019. https://arxiv.org/abs/1712.07629
 
     """
+
     default_config = {
-        'descriptor_dim': 256,
-        'nms_radius': 4,
-        'keypoint_threshold': 0.005,
-        'max_keypoints': -1,
-        'remove_borders': 4,
+        "descriptor_dim": 256,
+        "nms_radius": 4,
+        "keypoint_threshold": 0.005,
+        "max_keypoints": -1,
+        "remove_borders": 4,
     }
 
     def __init__(self, config):
@@ -141,24 +159,26 @@ class SuperPoint(nn.Module):
 
         self.convDa = nn.Conv2d(c4, c5, kernel_size=3, stride=1, padding=1)
         self.convDb = nn.Conv2d(
-            c5, self.config['descriptor_dim'],
-            kernel_size=1, stride=1, padding=0)
+            c5, self.config["descriptor_dim"], kernel_size=1, stride=1, padding=0
+        )
 
-        path = Path(__file__).parent / 'weights/superpoint_v1.pth'
+        path = Path(__file__).parent / "weights/superpoint_v1.pth"
         self.load_state_dict(torch.load(str(path)))
 
-        mk = self.config['max_keypoints']
+        mk = self.config["max_keypoints"]
         if mk == 0 or mk < -1:
-            raise ValueError('\"max_keypoints\" must be positive or \"-1\"')
+            raise ValueError('"max_keypoints" must be positive or "-1"')
 
-        print('Loaded SuperPoint model')
+        print("Loaded SuperPoint model")
 
     def forward(self, data, curr_max_kp=None, curr_key_thresh=None):
-        if curr_max_kp is None: curr_max_kp = self.config['max_keypoints']
-        if curr_key_thresh is None: curr_key_thresh = self.config['keypoint_threshold']
+        if curr_max_kp is None:
+            curr_max_kp = self.config["max_keypoints"]
+        if curr_key_thresh is None:
+            curr_key_thresh = self.config["keypoint_threshold"]
         """ Compute keypoints, scores, descriptors for image """
         # Shared Encoder
-        x = self.relu(self.conv1a(data['image']))
+        x = self.relu(self.conv1a(data["image"]))
         x = self.relu(self.conv1b(x))
         x = self.pool(x)
         x = self.relu(self.conv2a(x))
@@ -176,25 +196,33 @@ class SuperPoint(nn.Module):
         scores = torch.nn.functional.softmax(scores, 1)[:, :-1]
         b, _, h, w = scores.shape
         scores = scores.permute(0, 2, 3, 1).reshape(b, h, w, 8, 8)
-        scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h*8, w*8)
-        scores = simple_nms(scores, self.config['nms_radius'])
+        scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h * 8, w * 8)
+        scores = simple_nms(scores, self.config["nms_radius"])
 
         # Extract keypoints
-        keypoints = [
-            torch.nonzero(s > curr_key_thresh)
-            for s in scores]
+        keypoints = [torch.nonzero(s > curr_key_thresh) for s in scores]
         scores = [s[tuple(k.t())] for s, k in zip(scores, keypoints)]
         # Convert (h, w) to (x, y)
         keypoints = [torch.flip(k, [1]).float() for k in keypoints]
         # Discard keypoints near the image borders
-        keypoints, scores = list(zip(*[
-            remove_borders(k, s, self.config['remove_borders'], h*8, w*8)
-            for k, s in zip(keypoints, scores)]))
+        keypoints, scores = list(
+            zip(
+                *[
+                    remove_borders(k, s, self.config["remove_borders"], h * 8, w * 8)
+                    for k, s in zip(keypoints, scores)
+                ]
+            )
+        )
         # Keep the k keypoints with highest score
         if curr_max_kp >= 0:
-            keypoints, scores = list(zip(*[
-                top_k_keypoints(k, s, curr_max_kp)
-                for k, s in zip(keypoints, scores)]))
+            keypoints, scores = list(
+                zip(
+                    *[
+                        top_k_keypoints(k, s, curr_max_kp)
+                        for k, s in zip(keypoints, scores)
+                    ]
+                )
+            )
 
         # Compute the dense descriptors
         cDa = self.relu(self.convDa(x))
@@ -202,24 +230,28 @@ class SuperPoint(nn.Module):
         descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
 
         # Extract descriptors
-        descriptors = [sample_descriptors(k[None], d[None], 8)[0]
-                       for k, d in zip(keypoints, descriptors)]
+        descriptors = [
+            sample_descriptors(k[None], d[None], 8)[0]
+            for k, d in zip(keypoints, descriptors)
+        ]
 
         return {
-            'keypoints': keypoints,
-            'scores': scores,
-            'descriptors': descriptors,
+            "keypoints": keypoints,
+            "scores": scores,
+            "descriptors": descriptors,
         }
 
     def forward_train(self, data):
         """
         Compute keypoints, scores, descriptors for image during training.
-        Here the first half contains the original image, the next half contains warped images and its 
+        Here the first half contains the original image, the next half contains warped images and its
         keypoints should be removed from border according to the given homography matrix
         """
         # Shared Encoder
-        homo_matrices = data['homography'] #if batch size of image is N, the batch size of homography is N/2
-        x = self.relu(self.conv1a(data['image']))
+        homo_matrices = data[
+            "homography"
+        ]  # if batch size of image is N, the batch size of homography is N/2
+        x = self.relu(self.conv1a(data["image"]))
         x = self.relu(self.conv1b(x))
         x = self.pool(x)
         x = self.relu(self.conv2a(x))
@@ -237,13 +269,13 @@ class SuperPoint(nn.Module):
         scores = torch.nn.functional.softmax(scores, 1)[:, :-1]
         b, _, h, w = scores.shape
         scores = scores.permute(0, 2, 3, 1).reshape(b, h, w, 8, 8)
-        scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h*8, w*8)
-        scores = simple_nms(scores, self.config['nms_radius'])
+        scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h * 8, w * 8)
+        scores = simple_nms(scores, self.config["nms_radius"])
 
         # Extract keypoints
         keypoints = [
-            torch.nonzero(s > self.config['keypoint_threshold'])
-            for s in scores]
+            torch.nonzero(s > self.config["keypoint_threshold"]) for s in scores
+        ]
         scores = [s[tuple(k.t())] for s, k in zip(scores, keypoints)]
         # Convert (h, w) to (x, y)
         keypoints = [torch.flip(k, [1]).float() for k in keypoints]
@@ -251,42 +283,80 @@ class SuperPoint(nn.Module):
         homo_mat_index = 0
         results = []
         mid_point = len(keypoints) // 2
-        for i, (k,s) in enumerate(zip(keypoints, scores)):
-            if i < mid_point: # orig image
-                results.append(remove_borders(k, s, self.config['remove_borders'], h*8, w*8))
+        for i, (k, s) in enumerate(zip(keypoints, scores)):
+            if i < mid_point:  # orig image
+                results.append(
+                    remove_borders(k, s, self.config["remove_borders"], h * 8, w * 8)
+                )
             else:
                 homo_matrix = homo_matrices[homo_mat_index]
                 homo_mat_index += 1
-                results.append(remove_borders_projected(k, s, self.config['remove_borders'], h*8, w*8, homo_matrix))
+                results.append(
+                    remove_borders_projected(
+                        k, s, self.config["remove_borders"], h * 8, w * 8, homo_matrix
+                    )
+                )
         keypoints, scores = list(zip(*results))
         # Keep the k keypoints with highest score
-        if self.config['max_keypoints'] >= 0:
-            keypoints, scores = list(zip(*[
-                top_k_keypoints(k, s, self.config['max_keypoints'])
-                for k, s in zip(keypoints, scores)]))
+        if self.config["max_keypoints"] >= 0:
+            keypoints, scores = list(
+                zip(
+                    *[
+                        top_k_keypoints(k, s, self.config["max_keypoints"])
+                        for k, s in zip(keypoints, scores)
+                    ]
+                )
+            )
         keypoints, scores = list(keypoints), list(scores)
         for i, (k, s) in enumerate(zip(keypoints, scores)):
             """
             Occurence of below condition is very rare as we are sampling keypoints above threshold of 0 itself and then
-            sampling max_keypoints from it. But incase if it happends then we are randomly adding some pixel locations to 
+            sampling max_keypoints from it. But incase if it happends then we are randomly adding some pixel locations to
             without checking any conditions with respect to preexisting keypoints.
             """
-            if len(k) < self.config['max_keypoints']:
+            if len(k) < self.config["max_keypoints"]:
                 print("Rare condition executed")
-                to_add_points = self.config['max_keypoints'] - len(k)
-                random_keypoints = torch.stack([torch.randint(0, w*8, (to_add_points,), dtype=torch.float32, device=k.device), torch.randint(0, h*8, (to_add_points,), dtype=torch.float32, device=k.device)], 1)
+                to_add_points = self.config["max_keypoints"] - len(k)
+                random_keypoints = torch.stack(
+                    [
+                        torch.randint(
+                            0,
+                            w * 8,
+                            (to_add_points,),
+                            dtype=torch.float32,
+                            device=k.device,
+                        ),
+                        torch.randint(
+                            0,
+                            h * 8,
+                            (to_add_points,),
+                            dtype=torch.float32,
+                            device=k.device,
+                        ),
+                    ],
+                    1,
+                )
                 keypoints[i] = torch.cat([keypoints[i], random_keypoints], dim=0)
-                scores[i] = torch.cat([scores[i], torch.ones(to_add_points, dtype=torch.float32, device=s.device)*0.1], dim=0)
+                scores[i] = torch.cat(
+                    [
+                        scores[i],
+                        torch.ones(to_add_points, dtype=torch.float32, device=s.device)
+                        * 0.1,
+                    ],
+                    dim=0,
+                )
         # Compute the dense descriptors
         cDa = self.relu(self.convDa(x))
         descriptors = self.convDb(cDa)
         descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
 
         # Extract descriptors
-        descriptors = [sample_descriptors(k[None], d[None], 8)[0]
-                       for k, d in zip(keypoints, descriptors)]
+        descriptors = [
+            sample_descriptors(k[None], d[None], 8)[0]
+            for k, d in zip(keypoints, descriptors)
+        ]
         return {
-            'keypoints': keypoints,
-            'scores': scores,
-            'descriptors': descriptors,
+            "keypoints": keypoints,
+            "scores": scores,
+            "descriptors": descriptors,
         }
